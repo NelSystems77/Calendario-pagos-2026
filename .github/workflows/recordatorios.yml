@@ -19,34 +19,17 @@ jobs:
     env:
       TZ: America/Costa_Rica
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: main
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
 
       - name: Instalar dependencias
         working-directory: scripts
         run: npm install --no-audit --no-fund
-
-      - name: Diagnóstico
-        working-directory: scripts
-        continue-on-error: true
-        run: |
-          echo "node: $(node -v)"
-          echo "--- archivos ---"; ls -la .. ; ls -la .
-          echo "--- require web-push ---"; node -e "require('web-push'); console.log('web-push OK')"
-          echo "--- require pagos-data ---"; node -e "console.log(Object.keys(require('../pagos-data.js')))"
-          echo "--- require lib-cripto ---"; node -e "console.log(Object.keys(require('./lib-cripto')))"
-          echo "--- longitudes de secretos ---"
-          node -e "for (const k of ['VAPID_PUBLIC_KEY','VAPID_PRIVATE_KEY','VAPID_SUBJECT','SUB_PRIVATE_KEY']) { const v=process.env[k]||''; console.log(k, '=>', v.length, 'car.', JSON.stringify(v.slice(0,6))+'…', /\n|\r/.test(v)?'(TIENE SALTO DE LÍNEA)':''); }"
-        env:
-          VAPID_PUBLIC_KEY: ${{ secrets.VAPID_PUBLIC_KEY }}
-          VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
-          VAPID_SUBJECT: ${{ secrets.VAPID_SUBJECT }}
-          SUB_PRIVATE_KEY: ${{ secrets.SUB_PRIVATE_KEY }}
 
       - name: Enviar recordatorios
         working-directory: scripts
