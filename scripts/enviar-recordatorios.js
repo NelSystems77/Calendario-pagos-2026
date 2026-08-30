@@ -10,11 +10,20 @@
  * SUB_PRIVATE_KEY.
  */
 
+console.log("== enviar-recordatorios: arranque, node " + process.version + " ==");
+
 const fs = require("fs");
 const path = require("path");
-const webpush = require("web-push");
-const { avisosPendientes, textoAviso, tagAviso } = require("../pagos-data.js");
-const { descifrarSuscripcion } = require("./lib-cripto");
+
+let webpush, avisosPendientes, textoAviso, tagAviso, descifrarSuscripcion;
+try {
+  webpush = require("web-push");
+  ({ avisosPendientes, textoAviso, tagAviso } = require("../pagos-data.js"));
+  ({ descifrarSuscripcion } = require("./lib-cripto"));
+} catch (e) {
+  console.error("Fallo al cargar dependencias: " + (e && e.stack || e));
+  process.exit(1);
+}
 
 const SUBS_DIR = path.join(__dirname, "..", "subscriptions");
 const {
