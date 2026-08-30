@@ -1,10 +1,15 @@
 // Sube APP_VERSION al cambiar cualquier archivo cacheado o los datos de pagos.
 // Debe coincidir con el ?v= de index.html.
-const APP_VERSION = "2026.5";
+const APP_VERSION = "2026.6";
 const CACHE_NAME = "pagos-" + APP_VERSION;
 
-// Datos y lógica compartida (PAGOS, avisosPendientes, textoAviso, ...).
-importScripts("pagos-data.js");
+// Datos y lógica compartida (PAGOS, avisosPendientes, textoAviso, guardarSuscripcion...).
+// Si fallara la carga, el Service Worker sigue vivo para servir la app.
+try {
+  importScripts("pagos-data.js");
+} catch (e) {
+  // sin los extras de recordatorios en segundo plano, pero la app carga igual
+}
 
 const ASSETS_TO_CACHE = [
   "./",
@@ -17,10 +22,14 @@ const ASSETS_TO_CACHE = [
   "icon-512.png"
 ];
 
-// Instalación: cachea los activos críticos.
+// Instalación: cachea los activos. Un fallo suelto no rompe la instalación.
 self.addEventListener("install", event => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then(cache => cache.addAll(ASSETS_TO_CACHE))
+    caches.open(CACHE_NAME).then(cache =>
+      Promise.all(ASSETS_TO_CACHE.map(url =>
+        cache.add(url).catch(() => null)
+      ))
+    )
   );
   self.skipWaiting();
 });
@@ -36,37 +45,49 @@ self.addEventListener("activate", event => {
   );
 });
 
-// Estrategia: red primero; si falla, caché. Solo peticiones GET de este origen.
+// Estrategia:
+//  - Navegación (abrir la app): red primero; si falla, index.html de caché.
+//  - Resto de GET del mismo origen: caché primero (ignorando ?v=), refresco detrás.
+// Nunca se resuelve a undefined -> nunca pantalla en blanco.
 self.addEventListener("fetch", event => {
   const req = event.request;
   if (req.method !== "GET") return;
+
+  if (req.mode === "navigate") {
+    event.respondWith(
+      fetch(req).catch(() =>
+        caches.match("index.html", { ignoreSearch: true })
+          .then(r => r || caches.match("./", { ignoreSearch: true }))
+          .then(r => r || new Response(
+            "<h1>Sin conexión</h1><p>Abre la app con internet al menos una vez.</p>",
+            { headers: { "Content-Type": "text/html; charset=utf-8" } }
+          ))
+      )
+    );
+    return;
+  }
+
   if (new URL(req.url).origin !== self.location.origin) return;
 
   event.respondWith(
-    fetch(req)
-      .then(res => {
+    caches.match(req, { ignoreSearch: true }).then(cached => {
+      const fromNet = fetch(req).then(res => {
         if (res && res.status === 200) {
           const clone = res.clone();
-          caches.open(CACHE_NAME).then(cache => cache.put(req, clone));
+          caches.open(CACHE_NAME).then(c => c.put(req, clone));
         }
         return res;
-      })
-      .catch(() => caches.match(req).then(hit => {
-        if (hit) return hit;
-        if (req.mode === "navigate") return caches.match("index.html");
-        return undefined;
-      }))
+      }).catch(() => cached);
+      return cached || fromNet;
+    })
   );
 });
 
-// ---------- Recordatorios de pagos ----------
+// ---------- Recordatorios de pagos (extras; requieren pagos-data.js) ----------
 
-// Muestra una notificación por cada pago que hoy cae en una ventana de aviso.
-// El "tag" evita duplicados: si ya hay una notificación de ese pago/ventana,
-// se reemplaza en silencio en lugar de acumularse.
 function notificarPagos() {
-  const pendientes = avisosPendientes();
-  return Promise.all(pendientes.map(item => {
+  if (typeof avisosPendientes !== "function") return Promise.resolve();
+  return Promise.all(avisosPendientes().map(item => {
     const msg = textoAviso(item.pago.nombre, item.dias);
     return self.registration.showNotification(msg.title, {
       body: msg.body,
@@ -80,18 +101,13 @@ function notificarPagos() {
 }
 
 // Sincronización periódica en segundo plano (Android / escritorio, PWA instalada).
-// El navegador decide la frecuencia real (aprox. 1 vez al día).
 self.addEventListener("periodicsync", event => {
-  if (event.tag === "revisar-pagos") {
-    event.waitUntil(notificarPagos());
-  }
+  if (event.tag === "revisar-pagos") event.waitUntil(notificarPagos());
 });
 
-// Permite forzar una revisión desde la página: navigator.serviceWorker.controller.postMessage("revisar-pagos")
+// Forzar una revisión desde la página.
 self.addEventListener("message", event => {
-  if (event.data === "revisar-pagos") {
-    event.waitUntil(notificarPagos());
-  }
+  if (event.data === "revisar-pagos") event.waitUntil(notificarPagos());
 });
 
 // Push real: lo envía el cron de GitHub Actions (scripts/enviar-recordatorios.js).
@@ -121,7 +137,7 @@ self.addEventListener("push", event => {
 
 // El navegador puede rotar la suscripción: hay que volver a registrarla.
 self.addEventListener("pushsubscriptionchange", event => {
-  if (!pushConfigListo()) return;
+  if (typeof pushConfigListo !== "function" || !pushConfigListo()) return;
   event.waitUntil(
     self.registration.pushManager.subscribe({
       userVisibleOnly: true,
