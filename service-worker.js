@@ -1,6 +1,6 @@
 // Sube APP_VERSION al cambiar cualquier archivo cacheado o los datos de pagos.
 // Debe coincidir con el ?v= de index.html.
-const APP_VERSION = "2026.6";
+const APP_VERSION = "2026.7";
 const CACHE_NAME = "pagos-" + APP_VERSION;
 
 // Datos y lógica compartida (PAGOS, avisosPendientes, textoAviso, guardarSuscripcion...).
