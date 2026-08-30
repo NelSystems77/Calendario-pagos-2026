@@ -43,7 +43,7 @@ var PAGOS = [
 ];
 
 // Días de antelación con que se avisa de cada pago.
-var AVISOS_DIAS = [3, 1, 0];
+var AVISOS_DIAS = [5, 3, 1, 0]; // TEMPORAL: 5 añadido para prueba de push (revertir a [3,1,0])
 
 var MESES = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
     "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"];
