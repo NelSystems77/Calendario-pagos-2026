@@ -104,7 +104,7 @@ function tagAviso(pago, dias) {
 // ============================================================
 var PUSH_CONFIG = {
     vapidPublicKey: "BEe1IdCQQz6r84Ok1bWYLferNXvefKvduGvMFxCA8ic2NKx0OAYFdXU4_dwEvAOH5LOTKO-BJlmXPalv3SFkfMQ",
-    workerUrl: "https://TU-WORKER.workers.dev"
+    workerUrl: "https://calendario-pagos-push.nelsystems77.workers.dev"
 };
 
 function pushConfigListo() {

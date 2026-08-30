@@ -8,7 +8,7 @@ compatibility_date = "2025-01-01"
 # Reemplaza el id por el de tu namespace KV:
 #   npx wrangler kv namespace create SUBS
 kv_namespaces = [
-  { binding = "SUBS", id = "PON_AQUI_EL_ID_DEL_NAMESPACE_KV" }
+  { binding = "SUBS", id = "bbc1f80e1748492fbf8cf490b38d09c5" }
 ]
 
 # El secreto ADMIN_TOKEN no va aquí. Créalo con:
