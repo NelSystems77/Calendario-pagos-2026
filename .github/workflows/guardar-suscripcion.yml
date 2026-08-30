@@ -18,6 +18,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: main
 
       - uses: actions/setup-node@v4
         with:
@@ -37,9 +39,10 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add subscriptions/
-          git commit -m "Alta de suscripción push (#${{ github.event.issue.number }})" || echo "sin cambios"
-          git pull --rebase --autostash origin "${GITHUB_REF_NAME}" || true
-          git push
+          git commit -m "Alta de suscripción push (#${{ github.event.issue.number }})" || { echo "sin cambios"; exit 0; }
+          for i in 1 2 3; do
+            git pull --rebase --autostash origin main && git push && break || sleep 5
+          done
 
       - name: Cerrar el issue como procesado
         if: steps.proc.outputs.resultado == 'ok'
