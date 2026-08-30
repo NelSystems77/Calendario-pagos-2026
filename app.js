@@ -125,27 +125,10 @@ function mostrarAvisos(forzar) {
     });
 }
 
-// ---------- Suscripción a Web Push vía issue de GitHub ----------
-var _push = { sub: null, urlIssue: null };
-
-function suscripcionConfirmada(sub) {
-    try {
-        var guardado = localStorage.getItem("pushConfirmadoEndpoint");
-        if (!guardado) return false;
-        return sub ? guardado === sub.endpoint : true;
-    } catch (e) { return false; }
-}
-
-function marcarPanelGitHub(mostrar) {
-    var panel = document.getElementById("panelGitHub");
-    if (panel) panel.hidden = !mostrar;
-}
-
-// Crea (o reutiliza) la PushSubscription, la cifra y prepara la URL del issue.
-function prepararSuscripcionGitHub() {
-    if (!pushConfigListo() || !("PushManager" in window) || !("serviceWorker" in navigator)) {
-        return Promise.resolve(null);
-    }
+// ---------- Suscripción a Web Push (Worker de Cloudflare) ----------
+// Crea (o reutiliza) la PushSubscription y la manda al Worker.
+function suscribirPush() {
+    if (!puedeSuscribirPush()) return Promise.resolve();
 
     return navigator.serviceWorker.ready.then(function (reg) {
         return reg.pushManager.getSubscription().then(function (existente) {
@@ -156,41 +139,13 @@ function prepararSuscripcionGitHub() {
             });
         });
     }).then(function (sub) {
-        var raw = sub.toJSON();
-        return cifrarSuscripcion({
-            endpoint: raw.endpoint,
-            keys: raw.keys,
-            ua: (navigator.userAgent || "").slice(0, 180),
-            ts: Date.now()
-        }).then(function (blob) {
-            return { sub: sub, url: construirUrlIssue(blob) };
+        return guardarSuscripcion(sub).then(function () {
+            try { localStorage.setItem("pushSuscrito", sub.endpoint); } catch (e) {}
+            actualizarEstado();
         });
-    });
-}
-
-// forzarPanel = true tras pulsar el botón; false al abrir la app (solo si falta confirmar).
-function revisarSuscripcion(forzarPanel) {
-    return prepararSuscripcionGitHub().then(function (res) {
-        if (!res) return;
-        _push.sub = res.sub;
-        _push.urlIssue = res.url;
-
-        var link = document.getElementById("linkGitHub");
-        if (link) link.href = res.url;
-
-        marcarPanelGitHub(forzarPanel || !suscripcionConfirmada(res.sub));
-        actualizarEstado();
     }).catch(function (e) {
-        console.warn("No se pudo preparar la suscripción:", e);
+        console.warn("Suscripción push falló:", e);
     });
-}
-
-function onConfirmadoGitHub() {
-    try {
-        if (_push.sub) localStorage.setItem("pushConfirmadoEndpoint", _push.sub.endpoint);
-    } catch (e) {}
-    marcarPanelGitHub(false);
-    actualizarEstado();
 }
 
 // ---------- Sincronización periódica en segundo plano ----------
@@ -230,7 +185,7 @@ function activarRecordatorios() {
 
         registrarSyncPeriodico();
         mostrarAvisos(true);
-        revisarSuscripcion(true);
+        suscribirPush();
         actualizarEstado();
     });
 }
@@ -249,9 +204,7 @@ function actualizarEstado() {
 
     if (Notification.permission === "granted") {
         if (puedeSuscribirPush()) {
-            el.textContent = suscripcionConfirmada(_push.sub)
-                ? "Recordatorios activos ✔ — también con la app cerrada."
-                : "Casi listo: confirma la suscripción en GitHub (recuadro de arriba).";
+            el.textContent = "Recordatorios activos ✔ — también con la app cerrada.";
         } else if (esiOS() && !appInstalada()) {
             el.textContent = "Instala la app (Compartir → Añadir a inicio) y ábrela desde el ícono para los avisos con la app cerrada.";
         } else {
@@ -272,7 +225,7 @@ function iniciarApp() {
     if (soportaNotificaciones() && Notification.permission === "granted") {
         registrarSyncPeriodico();
         mostrarAvisos(false);
-        revisarSuscripcion(false);
+        suscribirPush();
     }
 }
 
@@ -288,8 +241,6 @@ document.addEventListener("DOMContentLoaded", function () {
     iniciarApp();
     var btn = document.getElementById("btnNotify");
     if (btn) btn.addEventListener("click", activarRecordatorios);
-    var btnGH = document.getElementById("btnConfirmadoGH");
-    if (btnGH) btnGH.addEventListener("click", onConfirmadoGitHub);
 });
 
 // Reintento de render para navegadores lentos / Safari en incógnito.

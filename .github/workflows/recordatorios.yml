@@ -6,9 +6,6 @@ on:
     - cron: "0 12 * * *"
   workflow_dispatch: {}
 
-permissions:
-  contents: write
-
 concurrency:
   group: recordatorios
   cancel-in-progress: false
@@ -20,8 +17,6 @@ jobs:
       TZ: America/Costa_Rica
     steps:
       - uses: actions/checkout@v5
-        with:
-          ref: main
 
       - uses: actions/setup-node@v4
         with:
@@ -35,18 +30,8 @@ jobs:
         working-directory: scripts
         run: node enviar-recordatorios.js
         env:
+          WORKER_URL: ${{ secrets.WORKER_URL }}
+          WORKER_ADMIN_TOKEN: ${{ secrets.WORKER_ADMIN_TOKEN }}
           VAPID_PUBLIC_KEY: ${{ secrets.VAPID_PUBLIC_KEY }}
           VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
           VAPID_SUBJECT: ${{ secrets.VAPID_SUBJECT }}
-          SUB_PRIVATE_KEY: ${{ secrets.SUB_PRIVATE_KEY }}
-
-      - name: Commit de la limpieza de suscripciones caducadas
-        if: always()
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add subscriptions/
-          git commit -m "Limpieza de suscripciones caducadas" || { echo "sin cambios"; exit 0; }
-          for i in 1 2 3; do
-            git pull --rebase --autostash origin main && git push && break || sleep 5
-          done

@@ -99,23 +99,21 @@ function tagAviso(pago, dias) {
 // ============================================================
 //  Configuración de notificaciones push (Web Push / VAPID).
 //  - vapidPublicKey : clave pública VAPID (ver PUSH-SETUP.md).
-//  - encPublicKey   : clave pública RSA-OAEP (SPKI base64) con la que
-//                     se cifra la suscripción antes de mandarla al issue.
-//  - repo           : owner/repo donde se abren los issues.
+//  - workerUrl      : URL del Worker de Cloudflare que guarda las
+//                     suscripciones (p. ej. https://xxx.workers.dev).
 // ============================================================
 var PUSH_CONFIG = {
     vapidPublicKey: "BEe1IdCQQz6r84Ok1bWYLferNXvefKvduGvMFxCA8ic2NKx0OAYFdXU4_dwEvAOH5LOTKO-BJlmXPalv3SFkfMQ",
-    encPublicKey: "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAnZVdkzRfk8bQVu4bourGuW0TfnLgZAPFWgraUb7FMLmFPrjQs31PLzjcod+pw+OWuFgoBgFt4KRmJGK3BroH8K7nXdwtFjKKpQBYwtsX4VsX+JAY45IQiC+MWmvb2AYjvcSUMPgVmayqCUmkVKD81rngVTFyF1M+nsBE3+AM6jp3DOc332RBp1+/5F1GEyqjgKQui7J4yFVk4AYX0u+3ktycP+HL67zBXV2b3RhY3Pak9Ml2WWt5M4xy+3mAjvPzT5n42jOESChmuuwQkROEd021RLzcJ7c0zx4WndM1r/QIYi9Y0MQN1TcdL01WDrEVZxKrL5OYTUSxrigM8oWF+wIDAQAB",
-    repo: "NelSystems77/Calendario-pagos-2026"
+    workerUrl: "https://TU-WORKER.workers.dev"
 };
 
 function pushConfigListo() {
     return PUSH_CONFIG.vapidPublicKey.indexOf("PEGA_AQUI") !== 0 &&
-        PUSH_CONFIG.encPublicKey.indexOf("PEGA_AQUI") !== 0 &&
-        PUSH_CONFIG.repo.indexOf("/") !== -1;
+        /^https:\/\//.test(PUSH_CONFIG.workerUrl) &&
+        PUSH_CONFIG.workerUrl.indexOf("TU-WORKER") === -1;
 }
 
-// ---------- Helpers base64 <-> bytes ----------
+// base64url -> Uint8Array (para applicationServerKey).
 function base64UrlToUint8Array(base64String) {
     var padding = "=".repeat((4 - base64String.length % 4) % 4);
     var base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
@@ -125,63 +123,23 @@ function base64UrlToUint8Array(base64String) {
     return out;
 }
 
-function base64ToBytes(b64) {
-    var raw = atob(b64);
-    var out = new Uint8Array(raw.length);
-    for (var i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
-    return out;
-}
+// Envía la PushSubscription al Worker de Cloudflare.
+function guardarSuscripcion(sub) {
+    var raw = sub.toJSON();
+    var ua = "";
+    try { ua = (navigator && navigator.userAgent || "").slice(0, 200); } catch (e) {}
 
-function bytesToBase64(bytes) {
-    var bin = "";
-    for (var i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
-    return btoa(bin);
-}
-
-// ---------- Cifrado de la suscripción (sobre RSA-OAEP + AES-GCM) ----------
-// Devuelve un único blob base64 apto para pegar en el cuerpo de un issue.
-function cifrarSuscripcion(obj) {
-    var subtle = crypto.subtle;
-    var plaintext = new TextEncoder().encode(JSON.stringify(obj));
-    var aesKey, iv, ct;
-
-    return subtle.generateKey({ name: "AES-GCM", length: 256 }, true, ["encrypt"])
-        .then(function (k) {
-            aesKey = k;
-            iv = crypto.getRandomValues(new Uint8Array(12));
-            return subtle.encrypt({ name: "AES-GCM", iv: iv }, aesKey, plaintext);
+    return fetch(PUSH_CONFIG.workerUrl.replace(/\/$/, "") + "/subscribe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+            subscription: { endpoint: raw.endpoint, keys: raw.keys },
+            ua: ua
         })
-        .then(function (buf) {
-            ct = new Uint8Array(buf);
-            return subtle.exportKey("raw", aesKey);
-        })
-        .then(function (rawAes) {
-            return subtle.importKey(
-                "spki", base64ToBytes(PUSH_CONFIG.encPublicKey),
-                { name: "RSA-OAEP", hash: "SHA-256" }, false, ["encrypt"]
-            ).then(function (pub) {
-                return subtle.encrypt({ name: "RSA-OAEP" }, pub, rawAes);
-            });
-        })
-        .then(function (encKeyBuf) {
-            var envelope = {
-                v: 1,
-                k: bytesToBase64(new Uint8Array(encKeyBuf)),
-                iv: bytesToBase64(iv),
-                d: bytesToBase64(ct)
-            };
-            return btoa(JSON.stringify(envelope));
-        });
-}
-
-// URL de "nuevo issue" prellenada con el blob cifrado.
-function construirUrlIssue(blob) {
-    var base = "https://github.com/" + PUSH_CONFIG.repo + "/issues/new";
-    var titulo = "[push] alta de recordatorios";
-    var cuerpo =
-        "No edites este issue: un robot lo procesa y lo cierra solo.\n\n" +
-        "```\n" + blob + "\n```\n";
-    return base + "?title=" + encodeURIComponent(titulo) + "&body=" + encodeURIComponent(cuerpo);
+    }).then(function (r) {
+        if (!r.ok) throw new Error("el Worker respondió " + r.status);
+        return r.json();
+    });
 }
 
 // Permite reutilizar la lógica desde los scripts de GitHub Actions (Node).

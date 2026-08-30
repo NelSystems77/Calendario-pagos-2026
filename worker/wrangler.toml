@@ -1,0 +1,15 @@
+# Configuración del Worker. Despliegue:  cd worker && npx wrangler deploy
+# (o pega worker.js en el editor del dashboard de Cloudflare).
+
+name = "calendario-pagos-push"
+main = "worker.js"
+compatibility_date = "2025-01-01"
+
+# Reemplaza el id por el de tu namespace KV:
+#   npx wrangler kv namespace create SUBS
+kv_namespaces = [
+  { binding = "SUBS", id = "PON_AQUI_EL_ID_DEL_NAMESPACE_KV" }
+]
+
+# El secreto ADMIN_TOKEN no va aquí. Créalo con:
+#   npx wrangler secret put ADMIN_TOKEN

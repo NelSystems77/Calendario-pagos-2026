@@ -1,60 +1,71 @@
 /**
  * Recordatorios de pago — envío diario vía Web Push (cron de GitHub Actions).
  *
- * Lee subscriptions/*.json, descifra cada suscripción, calcula qué pagos caen
- * hoy en una ventana de aviso (3 / 1 / 0 días) y manda una notificación por
- * cada combinación pago + ventana. Las suscripciones caducadas (404 / 410) o
- * ilegibles se borran; el workflow hace commit de esa limpieza.
+ * Lee las suscripciones del Worker de Cloudflare (GET /list), calcula qué pagos
+ * caen hoy en una ventana de aviso (3 / 1 / 0 días) y manda una notificación por
+ * cada combinación pago + ventana. Las suscripciones caducadas (404 / 410) se
+ * borran del Worker (POST /prune).
  *
- * Secretos necesarios: VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT,
- * SUB_PRIVATE_KEY.
+ * Secretos necesarios:
+ *   WORKER_URL           https://xxx.workers.dev
+ *   WORKER_ADMIN_TOKEN   el mismo valor que el secreto ADMIN_TOKEN del Worker
+ *   VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT
  */
 
 console.log("== enviar-recordatorios: arranque, node " + process.version + " ==");
 
-const fs = require("fs");
-const path = require("path");
-
-let webpush, avisosPendientes, textoAviso, tagAviso, descifrarSuscripcion;
+let webpush, avisosPendientes, textoAviso, tagAviso;
 try {
   webpush = require("web-push");
   ({ avisosPendientes, textoAviso, tagAviso } = require("../pagos-data.js"));
-  ({ descifrarSuscripcion } = require("./lib-cripto"));
 } catch (e) {
-  console.error("Fallo al cargar dependencias: " + (e && e.stack || e));
+  console.error("Fallo al cargar dependencias: " + ((e && e.stack) || e));
   process.exit(1);
 }
 
-const SUBS_DIR = path.join(__dirname, "..", "subscriptions");
-const {
-  VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT, SUB_PRIVATE_KEY
-} = process.env;
+const WORKER_URL = (process.env.WORKER_URL || "").trim().replace(/\/$/, "");
+const WORKER_ADMIN_TOKEN = (process.env.WORKER_ADMIN_TOKEN || "").trim();
+const VAPID_PUBLIC_KEY = (process.env.VAPID_PUBLIC_KEY || "").trim();
+const VAPID_PRIVATE_KEY = (process.env.VAPID_PRIVATE_KEY || "").trim();
 
 function exigir(nombre, valor) {
-  if (!valor || !String(valor).trim()) {
-    console.error("Falta la variable de entorno: " + nombre);
-    process.exit(1);
-  }
+  if (!valor) { console.error("Falta la variable de entorno: " + nombre); process.exit(1); }
 }
+exigir("WORKER_URL", WORKER_URL);
+exigir("WORKER_ADMIN_TOKEN", WORKER_ADMIN_TOKEN);
 exigir("VAPID_PUBLIC_KEY", VAPID_PUBLIC_KEY);
 exigir("VAPID_PRIVATE_KEY", VAPID_PRIVATE_KEY);
-exigir("SUB_PRIVATE_KEY", SUB_PRIVATE_KEY);
 
-// Normaliza el "subject": web-push exige mailto: o http(s):
-let vapidSubject = (VAPID_SUBJECT || "mailto:nelsystems77@gmail.com").trim();
+let vapidSubject = (process.env.VAPID_SUBJECT || "mailto:nelsystems77@gmail.com").trim();
 if (!/^(mailto:|https?:)/i.test(vapidSubject)) vapidSubject = "mailto:" + vapidSubject;
 
-const pub = (VAPID_PUBLIC_KEY || "").trim();
-const priv = (VAPID_PRIVATE_KEY || "").trim();
-console.log("Diagnóstico: subject=" + vapidSubject +
-  " | pub=" + pub.length + "c | priv=" + priv.length + "c | subKey=" + (SUB_PRIVATE_KEY || "").trim().length + "c");
+console.log("Diagnóstico: worker=" + WORKER_URL +
+  " | pub=" + VAPID_PUBLIC_KEY.length + "c | priv=" + VAPID_PRIVATE_KEY.length + "c");
 
 try {
-  webpush.setVapidDetails(vapidSubject, pub, priv);
+  webpush.setVapidDetails(vapidSubject, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
 } catch (e) {
   console.error("setVapidDetails falló: " + e.message);
-  console.error("Revisa que VAPID_PUBLIC_KEY (~87 car.) y VAPID_PRIVATE_KEY (~43 car.) no estén invertidas ni con saltos de línea.");
   process.exit(1);
+}
+
+async function pedirSuscripciones() {
+  const res = await fetch(WORKER_URL + "/list", {
+    headers: { Authorization: "Bearer " + WORKER_ADMIN_TOKEN }
+  });
+  if (!res.ok) throw new Error("GET /list -> " + res.status + " " + (await res.text()).slice(0, 200));
+  const data = await res.json();
+  return Array.isArray(data.subscriptions) ? data.subscriptions : [];
+}
+
+async function podarSuscripciones(endpoints) {
+  if (!endpoints.length) return;
+  const res = await fetch(WORKER_URL + "/prune", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: "Bearer " + WORKER_ADMIN_TOKEN },
+    body: JSON.stringify({ endpoints })
+  });
+  console.log("prune -> " + res.status + " (" + endpoints.length + " endpoint/s)");
 }
 
 (async () => {
@@ -67,26 +78,14 @@ try {
   }
   avisos.forEach(a => console.log("  aviso [" + a.dias + "d] " + a.pago.nombre));
 
-  let archivos = [];
-  try {
-    archivos = fs.readdirSync(SUBS_DIR).filter(f => f.endsWith(".json"));
-  } catch (e) { /* carpeta aún sin crear */ }
-  console.log(archivos.length + " suscripción(es) registradas.");
+  const subs = await pedirSuscripciones();
+  console.log(subs.length + " suscripción(es) registradas.");
 
-  let enviadas = 0, eliminadas = 0, errores = 0;
-  const aBorrar = [];
+  let enviadas = 0, errores = 0;
+  const caducadas = [];
 
-  for (const f of archivos) {
-    const ruta = path.join(SUBS_DIR, f);
-    let rec;
-    try { rec = JSON.parse(fs.readFileSync(ruta, "utf8")); }
-    catch (e) { aBorrar.push(f); continue; }
-    if (!rec || !rec.enc) { aBorrar.push(f); continue; }
-
-    let sub;
-    try { sub = await descifrarSuscripcion(rec.enc, SUB_PRIVATE_KEY); }
-    catch (e) { console.warn("Ilegible " + f.slice(0, 12) + ": " + e.message); aBorrar.push(f); continue; }
-
+  for (const sub of subs) {
+    if (!sub || !sub.endpoint || !sub.keys) continue;
     const subscription = { endpoint: sub.endpoint, keys: sub.keys };
     let viva = true;
 
@@ -105,19 +104,15 @@ try {
       } catch (err) {
         if (err.statusCode === 404 || err.statusCode === 410) { viva = false; break; }
         errores++;
-        console.warn("Error enviando a " + f.slice(0, 12) + "…: " + err.statusCode +
-          " " + (err.body || err.message || "").toString().slice(0, 160));
+        console.warn("Error enviando: " + err.statusCode + " " +
+          (err.body || err.message || "").toString().slice(0, 160));
       }
     }
-    if (!viva) aBorrar.push(f);
+    if (!viva) caducadas.push(sub.endpoint);
   }
 
-  for (const f of aBorrar) {
-    try { fs.unlinkSync(path.join(SUBS_DIR, f)); eliminadas++; } catch (e) {}
-  }
-
-  console.log("Listo. Enviadas: " + enviadas +
-    " | eliminadas: " + eliminadas + " | errores: " + errores);
+  await podarSuscripciones(caducadas);
+  console.log("Listo. Enviadas: " + enviadas + " | caducadas: " + caducadas.length + " | errores: " + errores);
 })().catch(e => {
   console.error(e);
   process.exit(1);

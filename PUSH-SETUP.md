@@ -1,111 +1,120 @@
-# Recordatorios push — puesta en marcha (solo GitHub)
+# Recordatorios push — puesta en marcha
 
 Avisos "📢 ¡Mañana pagan!" que llegan **con la app cerrada** en Android, escritorio
-y iPhone/iPad (PWA instalada, iOS 16.4+). Todo vive en GitHub: **GitHub Pages**
-sirve la app y **GitHub Actions** envía las notificaciones. Sin Firebase, sin
-servidores, sin costo.
+y iPhone/iPad (PWA instalada, iOS 16.4+). **Los usuarios no necesitan cuenta de
+nada**: solo pulsar "Activar Recordatorios" y aceptar el permiso.
 
-## Cómo funciona
+## Arquitectura
 
-1. El usuario abre la app, pulsa **Activar Recordatorios** y da permiso.
-2. La app crea la suscripción push, la **cifra** (RSA-OAEP + AES-GCM) y abre un
-   *issue* de GitHub prellenado. El usuario pulsa **"Submit new issue"** (una vez
-   por dispositivo; necesita sesión de GitHub).
-3. El workflow **Guardar suscripción push** descifra el issue, valida, guarda el
-   blob cifrado en `subscriptions/<hash>.json` y cierra el issue.
-4. El workflow **Recordatorios de pagos** corre cada día a las 06:00 CR: descifra
-   las suscripciones, mira qué pagos caen a 3 / 1 / 0 días y manda un push por
-   cada uno. Las suscripciones caducadas se borran solas.
+```
+Navegador  --(POST /subscribe)-->  Worker de Cloudflare  --(KV)-->  suscripciones
+GitHub Actions (cron diario)  --(GET /list)-->  Worker  -->  envía Web Push  -->  --(POST /prune)--> borra las caducadas
+GitHub Pages  -->  aloja la web
+```
 
-Las suscripciones quedan **cifradas** en el repo público: sin la clave privada
-(secreto de GitHub) nadie puede usarlas.
+- **Cloudflare Worker** (gratis): guarda las suscripciones en KV. ~1 archivo.
+- **GitHub Actions** (gratis): un cron que lee del Worker y manda los push.
+- **GitHub Pages** (gratis): sirve la app.
+
+Piezas a configurar: claves VAPID, el Worker + KV + su token, y 5 secretos en GitHub.
 
 ---
 
-## 1. Claves (ya generadas)
-
-**VAPID** — identifican al emisor de los push:
+## 1. Claves VAPID (ya generadas)
 
 | | valor |
 |---|---|
-| `VAPID_PUBLIC_KEY` | `BEe1IdCQQz6r84Ok1bWYLferNXvefKvduGvMFxCA8ic2NKx0OAYFdXU4_dwEvAOH5LOTKO-BJlmXPalv3SFkfMQ` |
-| `VAPID_PRIVATE_KEY` | *(te la paso aparte — nunca al repo)* |
+| `VAPID_PUBLIC_KEY` | `BEe1IdCQQz6r84Ok1bWYLferNXvefKvduGvMFxCA8ic2NKx0OAYFdXU4_dwEvAOH5LOTKO-BJlmXPalv3SFkfMQ` (87 car.) |
+| `VAPID_PRIVATE_KEY` | *(te la paso aparte — nunca al repo, solo secreto de GitHub)* |
 | `VAPID_SUBJECT` | `mailto:nelsystems77@gmail.com` |
 
-La pública ya está puesta en `pagos-data.js` → `PUSH_CONFIG.vapidPublicKey`.
+La pública ya está en `pagos-data.js` → `PUSH_CONFIG.vapidPublicKey`.
 
-**Cifrado de suscripciones** (RSA-OAEP):
-
-- Pública (SPKI) — ya está en `pagos-data.js` → `PUSH_CONFIG.encPublicKey`.
-- Privada (PKCS8) → secreto `SUB_PRIVATE_KEY`. *(te la paso aparte)*
-
-> Para regenerarlas todas:
-> ```bash
-> cd scripts && npm install
-> node -e "const w=require('web-push');console.log(w.generateVAPIDKeys())"
-> node -e "(async()=>{const s=globalThis.crypto.subtle;const k=await s.generateKey({name:'RSA-OAEP',modulusLength:2048,publicExponent:new Uint8Array([1,0,1]),hash:'SHA-256'},true,['encrypt','decrypt']);console.log('pub',Buffer.from(await s.exportKey('spki',k.publicKey)).toString('base64'));console.log('priv',Buffer.from(await s.exportKey('pkcs8',k.privateKey)).toString('base64'))})()"
-> ```
-> Si las cambias, actualiza `pagos-data.js` y los secretos.
+Regenerar: `cd scripts && npm i && node -e "console.log(require('web-push').generateVAPIDKeys())"`.
 
 ---
 
-## 2. Secretos de GitHub
+## 2. Cloudflare Worker
 
-Repo → **Settings → Secrets and variables → Actions → New repository secret**:
+1. Crea cuenta gratis en [dash.cloudflare.com](https://dash.cloudflare.com).
+2. Instala wrangler y entra: `npm i -g wrangler && wrangler login`.
+3. Crea el namespace KV:
+   ```bash
+   cd worker
+   wrangler kv namespace create SUBS
+   ```
+   Copia el `id` que imprime y pégalo en `worker/wrangler.toml` (campo `id`).
+4. Crea el token de administración (el mismo valor irá como secreto de GitHub):
+   ```bash
+   wrangler secret put ADMIN_TOKEN
+   # pega:  e173e844c6041d83a390e874e38e8c5cb76c46070e3693e6400ddb7de5ed7bfb
+   ```
+5. Despliega:
+   ```bash
+   wrangler deploy
+   ```
+   Te da una URL tipo `https://calendario-pagos-push.TU-SUBDOMINIO.workers.dev`.
+6. Pega esa URL en **dos sitios**:
+   - `pagos-data.js` → `PUSH_CONFIG.workerUrl`
+   - secreto `WORKER_URL` de GitHub (paso 4 siguiente).
+7. En `worker/worker.js`, si tu dominio de Pages no es
+   `https://nelsystems77.github.io`, ajusta `ALLOWED_ORIGINS` y vuelve a `wrangler deploy`.
+
+> Sin wrangler: en el dashboard → Workers & Pages → Create Worker → pega
+> `worker/worker.js`; en Settings crea la variable KV `SUBS` (bindea un namespace
+> nuevo) y el secreto `ADMIN_TOKEN`.
+
+---
+
+## 3. Secretos de GitHub
+
+Repo → **Settings → Secrets and variables → Actions**:
 
 | Nombre | Valor |
 |---|---|
-| `VAPID_PUBLIC_KEY` | clave pública VAPID |
-| `VAPID_PRIVATE_KEY` | clave privada VAPID |
+| `WORKER_URL` | `https://…workers.dev` (sin barra final) |
+| `WORKER_ADMIN_TOKEN` | el mismo valor que pusiste en `ADMIN_TOKEN` del Worker |
+| `VAPID_PUBLIC_KEY` | clave pública VAPID (87 car.) |
+| `VAPID_PRIVATE_KEY` | clave privada VAPID (43 car.) |
 | `VAPID_SUBJECT` | `mailto:nelsystems77@gmail.com` |
-| `SUB_PRIVATE_KEY` | clave privada RSA (PKCS8 base64, una sola línea) |
+
+*(Ya no hacen falta `SUB_PRIVATE_KEY` ni permisos de escritura de Actions — puedes borrarlos.)*
 
 ---
 
-## 3. Activar GitHub Pages
+## 4. GitHub Pages
 
-Repo → **Settings → Pages**:
-
-- **Source**: *Deploy from a branch*
-- **Branch**: `main` — carpeta `/ (root)` → **Save**
-
-La app quedará en `https://nelsystems77.github.io/Calendario-pagos-2026/`.
-(El archivo `.nojekyll` ya está para que Pages sirva todo tal cual.)
-
----
-
-## 4. Permisos de Actions
-
-Repo → **Settings → Actions → General → Workflow permissions** →
-**Read and write permissions** → Save. (Los workflows necesitan hacer commit de
-las suscripciones.)
+Settings → Pages → Source: *Deploy from a branch* → `main` / `/(root)`.
+App en `https://nelsystems77.github.io/Calendario-pagos-2026/`.
 
 ---
 
 ## 5. Probar
 
-1. Abre `https://nelsystems77.github.io/Calendario-pagos-2026/` en el móvil,
-   **instálala** (Compartir → Añadir a pantalla de inicio) y ábrela desde el ícono.
-2. Inicia sesión en GitHub en ese navegador.
-3. Pulsa **Activar Recordatorios** → acepta el permiso → se abre GitHub con un
-   issue `[push] …` prellenado → pulsa **Submit new issue**.
-4. En unos segundos el issue se cierra solo con "✅ Suscripción registrada" y
-   aparece un archivo en `subscriptions/`.
-5. Vuelve a la app y pulsa **"Ya lo confirmé"**.
-6. Fuerza un envío: repo → **Actions → Recordatorios de pagos → Run workflow**.
-   Si hoy no hay pago a 3/1/0 días dirá "nada que enviar" (normal). Para una
-   prueba real, edita `AVISOS_DIAS` en `pagos-data.js` añadiendo el nº de días que
-   falta para el próximo pago, haz push, lanza el workflow y luego revierte.
+1. `git push` con `pagos-data.js` ya apuntando al Worker.
+2. Móvil: abre la app, **instálala**, pulsa **Activar Recordatorios**, acepta.
+   No se abre nada más: la suscripción va directa al Worker.
+3. Verifica en Cloudflare → tu Worker → KV → namespace `SUBS`: debe haber una
+   clave `sub:…`.
+4. Fuerza un envío: repo → **Actions → Recordatorios de pagos → Run workflow**.
+   Log esperado:
+   ```
+   Diagnóstico: worker=https://… | pub=87c | priv=43c
+   Hoy no hay pagos en ventana de aviso. Nada que enviar.
+   ```
+   (El 4-sep está a 5 días, fuera de la ventana 3/1/0.)
+5. Prueba real de push: en `pagos-data.js` pon `AVISOS_DIAS = [5, 3, 1, 0]`,
+   push, **Run workflow** → debe llegar la notificación del pago del 4-sep.
+   Revierte a `[3, 1, 0]`.
 
 ---
 
 ## Notas
 
 - **iPhone**: la suscripción solo se crea desde la PWA **instalada** (iOS 16.4+).
-- Un dispositivo = un archivo en `subscriptions/`. Si el navegador rota la
-  suscripción, la app pide reactivar.
-- Los bots de los workflows hacen commits (`subscriptions/…`); cada uno dispara
-  una reconstrucción de Pages — es rápido y gratis.
+- Cuota gratis de Cloudflare Workers: 100 000 req/día — sobra de lejos.
+- El Worker solo acepta `Origin` de la lista `ALLOWED_ORIGINS`; `/list` y `/prune`
+  exigen el token. Aun así, si alguien manda basura, el envío la marca 404/410 y
+  se poda sola.
 - Cambiar fechas de pago: edita `pagos-data.js`, sube `APP_VERSION` en
-  `service-worker.js` y el `?v=` de `index.html`, y haz push.
-- Coste: GitHub Actions es gratis e ilimitado en repos públicos.
+  `service-worker.js` y el `?v=` de `index.html`, y `git push`.

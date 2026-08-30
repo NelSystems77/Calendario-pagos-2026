@@ -1,6 +1,6 @@
 // Sube APP_VERSION al cambiar cualquier archivo cacheado o los datos de pagos.
 // Debe coincidir con el ?v= de index.html.
-const APP_VERSION = "2026.4";
+const APP_VERSION = "2026.5";
 const CACHE_NAME = "pagos-" + APP_VERSION;
 
 // Datos y lógica compartida (PAGOS, avisosPendientes, textoAviso, ...).
@@ -119,18 +119,14 @@ self.addEventListener("push", event => {
   );
 });
 
-// El navegador puede rotar la suscripción. Desde el SW no se puede abrir un
-// issue de GitHub, así que avisamos al usuario para que reactive en la app.
+// El navegador puede rotar la suscripción: hay que volver a registrarla.
 self.addEventListener("pushsubscriptionchange", event => {
+  if (!pushConfigListo()) return;
   event.waitUntil(
-    self.registration.showNotification("Reactiva tus recordatorios", {
-      body: "Abre el Calendario de Pagos y pulsa “Activar Recordatorios” de nuevo.",
-      tag: "resubscribe",
-      icon: "icon-192.png",
-      badge: "icon-192.png",
-      requireInteraction: true,
-      data: { url: "./" }
-    })
+    self.registration.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: base64UrlToUint8Array(PUSH_CONFIG.vapidPublicKey)
+    }).then(guardarSuscripcion).catch(err => console.warn("Re-suscripción falló:", err))
   );
 });
 
