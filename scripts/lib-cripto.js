@@ -2,7 +2,8 @@
 // en el navegador (pagos-data.js). Solo usa APIs nativas de Node 20.
 
 const nodeCrypto = require("crypto");
-const subtle = globalThis.crypto.subtle;
+const webcrypto = globalThis.crypto || nodeCrypto.webcrypto;
+const subtle = webcrypto.subtle;
 
 function b64ToBytes(b64) {
   return new Uint8Array(Buffer.from(b64, "base64"));

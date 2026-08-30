@@ -22,17 +22,31 @@ const {
 } = process.env;
 
 function exigir(nombre, valor) {
-  if (!valor) { console.error("Falta la variable de entorno: " + nombre); process.exit(1); }
+  if (!valor || !String(valor).trim()) {
+    console.error("Falta la variable de entorno: " + nombre);
+    process.exit(1);
+  }
 }
 exigir("VAPID_PUBLIC_KEY", VAPID_PUBLIC_KEY);
 exigir("VAPID_PRIVATE_KEY", VAPID_PRIVATE_KEY);
 exigir("SUB_PRIVATE_KEY", SUB_PRIVATE_KEY);
 
-webpush.setVapidDetails(
-  VAPID_SUBJECT || "mailto:nelsystems77@gmail.com",
-  VAPID_PUBLIC_KEY,
-  VAPID_PRIVATE_KEY
-);
+// Normaliza el "subject": web-push exige mailto: o http(s):
+let vapidSubject = (VAPID_SUBJECT || "mailto:nelsystems77@gmail.com").trim();
+if (!/^(mailto:|https?:)/i.test(vapidSubject)) vapidSubject = "mailto:" + vapidSubject;
+
+const pub = (VAPID_PUBLIC_KEY || "").trim();
+const priv = (VAPID_PRIVATE_KEY || "").trim();
+console.log("Diagnóstico: subject=" + vapidSubject +
+  " | pub=" + pub.length + "c | priv=" + priv.length + "c | subKey=" + (SUB_PRIVATE_KEY || "").trim().length + "c");
+
+try {
+  webpush.setVapidDetails(vapidSubject, pub, priv);
+} catch (e) {
+  console.error("setVapidDetails falló: " + e.message);
+  console.error("Revisa que VAPID_PUBLIC_KEY (~87 car.) y VAPID_PRIVATE_KEY (~43 car.) no estén invertidas ni con saltos de línea.");
+  process.exit(1);
+}
 
 (async () => {
   console.log("Fecha del runner (TZ=" + (process.env.TZ || "UTC") + "): " + new Date().toString());
