@@ -1,0 +1,10 @@
+{
+  "name": "recordatorios-pagos",
+  "version": "1.0.0",
+  "private": true,
+  "type": "commonjs",
+  "description": "Alta y envío de recordatorios de pago vía Web Push (GitHub Actions).",
+  "dependencies": {
+    "web-push": "^3.6.7"
+  }
+}
